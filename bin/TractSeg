@@ -132,14 +132,13 @@ def main():
     parser.add_argument('--exp_name', metavar="folder_name", help="name of experiment - ONLY FOR TESTING",
                         default=None)
 
-    parser.add_argument('--tract_definition', metavar="TractQuerier+|AutoPTX", choices=["TractQuerier+", "AutoPTX"],
+    parser.add_argument('--tract_definition', metavar="TractQuerier+|xtract", choices=["TractQuerier+", "xtract"],
                         help="Select which tract definitions to use. 'TractQuerier+' defines tracts mainly by their"
-                             "cortical start and end region. 'AutoPTX' defines tracts mainly by ROIs in white matter. "
+                             "cortical start and end region. 'xtract' defines tracts mainly by ROIs in white matter. "
                              "Both have their advantages and disadvantages. 'TractQuerier+' referes to the dataset "
                              "described the TractSeg NeuroImage paper. "
-                             "NOTE 1: 'AutoPTX' only works for output type 'tractseg_segmentation' and "
-                             "'dm_regression'. "
-                             "NOTE 2: A pretrained 'AutoPTX' model is not available yet.",
+                             "NOTE 1: 'xtract' only works for output type 'tractseg_segmentation' and "
+                             "'dm_regression'.",
                         default="TractQuerier+")
 
     parser.add_argument("--rescale_dm", action="store_true",
@@ -249,7 +248,8 @@ def main():
         else:
             data_img = nib.load(peak_path)
         data_img_shape = data_img.get_data().shape
-        if Config.NR_OF_GRADIENTS != 1 and not (len(data_img_shape) == 4 and data_img_shape[3] == 9):
+        if Config.NR_OF_GRADIENTS != 1 and not (len(data_img_shape) == 4 and
+                                                data_img_shape[3] == Config.NR_OF_GRADIENTS):
             print(bcolors.ERROR + "ERROR" + bcolors.ENDC + bcolors.BOLD +
                   ": Input image must be a peak image (nifti 4D image with dimensions [x,y,z,9]). " +
                   "If you input a Diffusion image add the option '--raw_diffusion_input'." + bcolors.ENDC)
@@ -384,8 +384,8 @@ def main():
 
         if args.preprocess and not Config.EXPERIMENT_TYPE == "peak_regression":
             if Config.SINGLE_OUTPUT_FILE:
-                preprocessing.move_to_subject_space(Config.PREDICT_IMG_OUTPUT, Config.EXPERIMENT_TYPE, output_subdir,
-                                                    output_float=output_float)
+                preprocessing.move_to_subject_space_single_file(Config.PREDICT_IMG_OUTPUT, Config.EXPERIMENT_TYPE,
+                                                                output_subdir, output_float=output_float)
             else:
                 bundles = dataset_specific_utils.get_bundle_names(Config.CLASSES)[1:]
                 preprocessing.move_to_subject_space(Config.PREDICT_IMG_OUTPUT, bundles, Config.EXPERIMENT_TYPE,

@@ -20,6 +20,7 @@ from batchgenerators.transforms.resample_transforms import SimulateLowResolution
 from batchgenerators.transforms.noise_transforms import GaussianNoiseTransform
 from batchgenerators.transforms.noise_transforms import GaussianBlurTransform
 from batchgenerators.transforms.spatial_transforms import SpatialTransform
+from batchgenerators.transforms.spatial_transforms import ZoomTransform
 from batchgenerators.transforms.spatial_transforms import MirrorTransform
 from batchgenerators.transforms.sample_normalization_transforms import ZeroMeanUnitVarianceTransform
 from batchgenerators.transforms.utility_transforms import NumpyToTensor
@@ -29,10 +30,12 @@ from batchgenerators.dataloading.data_loader import SlimDataLoaderBase
 from batchgenerators.augmentations.utils import pad_nd_image
 from batchgenerators.augmentations.utils import center_crop_2D_image_batched
 from batchgenerators.augmentations.crop_and_pad_augmentations import crop
+from batchgenerators.augmentations.spatial_transformations import augment_zoom
 
 from tractseg.data.custom_transformations import ResampleTransformLegacy
 from tractseg.data.custom_transformations import FlipVectorAxisTransform
 from tractseg.data.spatial_transform_peaks import SpatialTransformPeaks
+from tractseg.data.spatial_transform_custom import SpatialTransformCustom
 from tractseg.libs.system_config import SystemConfig as C
 from tractseg.libs import data_utils
 from tractseg.libs import peak_utils
@@ -124,6 +127,17 @@ def load_training_data(Config, subject):
             data[:, :, :, 3] *= -1
             data[:, :, :, 6] *= -1
 
+    elif Config.FEATURES_FILENAME == "105g_CSD_BX":
+        rnd_choice_1 = np.random.random()
+        if rnd_choice_1 < 0.5:  # CSD
+            data = load(join(C.DATA_PATH, Config.DATASET_FOLDER, subject, "105g_2mm_peaks"))
+        else:  # BX
+            data = load(join(C.DATA_PATH, Config.DATASET_FOLDER, subject, "105g_2mm_bedpostx_peaks_scaled"))
+            # Flip x axis to make BedpostX compatible with mrtrix CSD
+            data[:, :, :, 0] *= -1
+            data[:, :, :, 3] *= -1
+            data[:, :, :, 6] *= -1
+
     elif Config.FEATURES_FILENAME == "32g270g_BX":
         rnd_choice = np.random.random()
         path_32g = join(C.DATA_PATH, Config.DATASET_FOLDER, subject, "32g_125mm_bedpostx_peaks_scaled")
@@ -174,6 +188,16 @@ class BatchGenerator2D_Nifti_random(SlimDataLoaderBase):
         super(self.__class__, self).__init__(*args, **kwargs)
         self.Config = None
 
+    def _zoom_x_and_y(self, x, y, zoom_factor):
+        # Very slow
+        x_new = []
+        y_new = []
+        for b in range(x.shape[0]):
+            x_tmp, y_tmp = augment_zoom(x[b], y[b], zoom_factor, order=3, order_seg=1, cval_seg=0)
+            x_new.append(x_tmp)
+            y_new.append(y_tmp)
+        return np.array(x_new), np.array(y_new)
+
     def generate_train_batch(self):
 
         subjects = self._data[0]
@@ -205,6 +229,9 @@ class BatchGenerator2D_Nifti_random(SlimDataLoaderBase):
         # y = pad_nd_image(y, self.Config.INPUT_DIM, mode='constant', kwargs={'constant_values': 0})
         # x = center_crop_2D_image_batched(x, self.Config.INPUT_DIM)
         # y = center_crop_2D_image_batched(y, self.Config.INPUT_DIM)
+
+        # If want to convert e.g. 1.25mm (HCP) image to 2mm image (bb)
+        # x, y = self._zoom_x_and_y(x, y, 0.67)  # very slow -> try spatial_transform, should be fast
 
         if self.Config.PAD_TO_SQUARE:
             #Crop and pad to input size
@@ -296,6 +323,8 @@ class DataLoaderTraining:
 
         if self.Config.SPATIAL_TRANSFORM == "SpatialTransformPeaks":
             SpatialTransformUsed = SpatialTransformPeaks
+        elif self.Config.SPATIAL_TRANSFORM == "SpatialTransformCustom":
+            SpatialTransformUsed = SpatialTransformCustom
         else:
             SpatialTransformUsed = SpatialTransform
 
@@ -305,9 +334,23 @@ class DataLoaderTraining:
                 #   if 144/2=72 -> always exactly centered; otherwise a bit off center
                 #   (brain can get off image and will be cut then)
                 if self.Config.DAUG_SCALE:
+
+                    if self.Config.INPUT_RESCALING:
+                        source_mm = 2  # for bb
+                        target_mm = float(self.Config.RESOLUTION[:-2])
+                        scale_factor = target_mm / source_mm
+                        scale = (scale_factor, scale_factor)
+                    else:
+                        scale = (0.9, 1.5)
+
+                    if self.Config.PAD_TO_SQUARE:
+                        patch_size = self.Config.INPUT_DIM
+                    else:
+                        patch_size = None  # keeps dimensions of the data
+
                     # spatial transform automatically crops/pads to correct size
                     center_dist_from_border = int(self.Config.INPUT_DIM[0] / 2.) - 10  # (144,144) -> 62
-                    tfs.append(SpatialTransformUsed(self.Config.INPUT_DIM,
+                    tfs.append(SpatialTransformUsed(patch_size,
                                                 patch_center_dist_from_border=center_dist_from_border,
                                                 do_elastic_deform=self.Config.DAUG_ELASTIC_DEFORM,
                                                 alpha=self.Config.DAUG_ALPHA, sigma=self.Config.DAUG_SIGMA,
@@ -315,7 +358,7 @@ class DataLoaderTraining:
                                                 angle_x=self.Config.DAUG_ROTATE_ANGLE,
                                                 angle_y=self.Config.DAUG_ROTATE_ANGLE,
                                                 angle_z=self.Config.DAUG_ROTATE_ANGLE,
-                                                do_scale=True, scale=(0.9, 1.5), border_mode_data='constant',
+                                                do_scale=True, scale=scale, border_mode_data='constant',
                                                 border_cval_data=0,
                                                 order_data=3,
                                                 border_mode_seg='constant', border_cval_seg=0,

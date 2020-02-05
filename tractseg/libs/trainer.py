@@ -8,10 +8,12 @@ import time
 import pickle
 import socket
 import datetime
+from collections import defaultdict
+
 import numpy as np
 from tqdm import tqdm
 from pprint import pprint
-from collections import defaultdict
+import nibabel as nib
 
 from tractseg.libs import exp_utils
 from tractseg.libs import metric_utils
@@ -149,7 +151,7 @@ def train_model(Config, model, data_loader):
         metrics = metric_utils.normalize_last_element(metrics, batch_nr["validate"], type="validate")
 
         print("  Epoch {}, Average Epoch loss = {}".format(epoch_nr, metrics["loss_train"][-1]))
-        print("  Epoch {}, nr_of_updates {}".format(epoch_nr, nr_of_updates))
+        exp_utils.print_and_save(Config.EXP_PATH, "  Epoch {}, nr_of_updates {}".format(epoch_nr, nr_of_updates))
 
         # Adapt LR
         if Config.LR_SCHEDULE:

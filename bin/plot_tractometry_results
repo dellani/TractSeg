@@ -1,8 +1,10 @@
 #!/usr/bin/env python
 
+import os
 import argparse
 import math
 from decimal import Decimal
+from os.path import join
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -15,6 +17,8 @@ from tractseg.data import dataset_specific_utils
 from tractseg.libs.AFQ_MultiCompCorrection import AFQ_MultiCompCorrection
 from tractseg.libs.AFQ_MultiCompCorrection import get_significant_areas
 from tractseg.libs import metric_utils
+from tractseg.libs import plot_utils
+from tractseg.libs import tracking
 
 
 def parse_subjects_file(file_path):
@@ -25,19 +29,26 @@ def parse_subjects_file(file_path):
         else:
             raise ValueError("Invalid first line in subjects file. Must start with '# tractometry_path='")
 
+        bundles = None
+        plot_3D_path = None
+
         # parse bundle names
-        l = f.readline().strip()
-        if l.startswith("# bundles="):
-            bundles_string = l.split("=")[1]
-            bundles = bundles_string.split(" ")
+        for i in range(2):
+            l = f.readline().strip()
+            if l.startswith("# bundles="):
+                bundles_string = l.split("=")[1]
+                bundles = bundles_string.split(" ")
 
-            valid_bundles = dataset_specific_utils.get_bundle_names("All_tractometry")[1:]
-            for bundle in bundles:
-                if bundle not in valid_bundles:
-                    raise ValueError("Invalid bundle name: {}".format(bundle))
+                valid_bundles = dataset_specific_utils.get_bundle_names("All_tractometry")[1:]
+                for bundle in bundles:
+                    if bundle not in valid_bundles:
+                        raise ValueError("Invalid bundle name: {}".format(bundle))
 
-            print("Using {} manually specified bundles.".format(len(bundles)))
-        else:
+                print("Using {} manually specified bundles.".format(len(bundles)))
+            elif l.startswith("# plot_3D="):
+                plot_3D_path = l.split("=")[1]
+
+        if bundles is None:
             bundles = dataset_specific_utils.get_bundle_names("All_tractometry")[1:]
 
     df = pd.read_csv(file_path, sep=" ", comment="#")
@@ -52,7 +63,7 @@ def parse_subjects_file(file_path):
         if df["group"].max() > 1:
             raise IOError("Column 'group' may only contain 0 and 1.")
 
-    return base_path, df, bundles
+    return base_path, df, bundles, plot_3D_path
 
 
 def correct_for_confounds(values, meta_data, bundles, selected_bun_indices, NR_POINTS, analysis_type, confound_names):
@@ -94,7 +105,7 @@ def get_corrected_alpha(values_allp, meta_data, analysis_type, subjects_A, subje
 
 
 def format_number(num):
-    if num > 0.00001:
+    if abs(num) > 0.00001:
         return round(num, 6)
     else:
         return '%.2e' % Decimal(num)
@@ -102,7 +113,8 @@ def format_number(num):
 
 def plot_tractometry_with_pvalue(values, meta_data, bundles, selected_bundles, output_path, alpha, FWE_method,
                                  analysis_type, correct_mult_tract_comp, show_detailed_p, nperm=1000,
-                                 hide_legend=False):
+                                 hide_legend=False, plot_3D_path=None, plot_3D_type="none",
+                                 tracking_format="trk_legacy", tracking_dir="auto", show_color_bar=True):
 
     NR_POINTS = values[meta_data["subject_id"][0]].shape[1]
     selected_bun_indices = [bundles.index(b) for b in selected_bundles]
@@ -177,14 +189,16 @@ def plot_tractometry_with_pvalue(values, meta_data, bundles, selected_bundles, o
 
         # Calc p-values
         pvalues = np.zeros(NR_POINTS)
+        stats = np.zeros(NR_POINTS)  # for ttest: t-value, for pearson: correlation
         for jdx in range(NR_POINTS):
             if analysis_type == "group":
                 values_controls = [values[s][b_idx][jdx] for s in subjects_A]
                 values_patients = [values[s][b_idx][jdx] for s in subjects_B]
-                pvalues[jdx] = scipy.stats.ttest_ind(values_controls, values_patients).pvalue
+                stats[jdx], pvalues[jdx] = scipy.stats.ttest_ind(values_controls, values_patients)
             else:
                 values_controls = [values[s][b_idx][jdx] for s in subjects_A]
-                _, pvalues[jdx] = scipy.stats.pearsonr(values_controls, meta_data["target"].values)
+                stats[jdx], pvalues[jdx] = scipy.stats.pearsonr(values_controls, meta_data["target"].values)
+
 
         # Plot significant areas
         if show_detailed_p:
@@ -214,6 +228,43 @@ def plot_tractometry_with_pvalue(values, meta_data, bundles, selected_bundles, o
                              (0, 0), (0, -35), xycoords='axes fraction', textcoords='offset points', va='top',
                              fontsize=10)
 
+        stats_label = "t-value:      " if analysis_type == "group" else "corr.coeff.: "
+        axes[i].annotate(stats_label + "   {}".format(format_number(stats[pvalues.argmin()])),
+                         (0, 0), (0, -55), xycoords='axes fraction', textcoords='offset points', va='top',
+                         fontsize=10)
+
+        if plot_3D_type != "none":
+
+            if plot_3D_type == "metric":
+                metric = np.array([values[s][b_idx] for s in subjects_A + subjects_B]).mean(axis=0)
+            else:
+                # metric = pvalues  # use this code if you want to plot the pvalues instead of the FA
+                metric = sig_areas
+
+            bundle = bundles[b_idx]
+            output_path_3D = output_path.split(".")[0] + "_" + bundle + "_3D.png"
+
+            if tracking_dir == "auto":
+                tracking_dir = tracking.get_tracking_folder_name("fixed_prob", False)
+
+            if tracking_format == "tck":
+                tracking_path = join(plot_3D_path, tracking_dir, bundle + ".tck")
+            else:
+                tracking_path = join(plot_3D_path, tracking_dir, bundle + ".trk")
+            ending_path = join(plot_3D_path, "endings_segmentations", bundle + "_b.nii.gz")
+            mask_path = join(plot_3D_path, "..", "nodif_brain_mask.nii.gz")
+
+            if not os.path.isfile(tracking_path):
+                raise ValueError("Could not find: " + tracking_path)
+            if not os.path.isfile(ending_path):
+                raise ValueError("Could not find: " + ending_path)
+            if not os.path.isfile(mask_path):
+                raise ValueError("Could not find: " + mask_path)
+
+            plot_utils.plot_bundles_with_metric(tracking_path, ending_path, mask_path, bundle, metric,
+                                                output_path_3D, tracking_format, show_color_bar)
+
+
     plt.tight_layout()
     plt.savefig(output_path, dpi=200)
 
@@ -231,6 +282,19 @@ def main():
                         default=5000)
     parser.add_argument("--alpha", metavar="a", type=float, help="The desired alpha level (default: 0.05)",
                         default=0.05)
+    # parser.add_argument("--plot3D", action="store_true", help="Generate streamline plots of each tract with FA on top",
+    #                     default=False)
+    parser.add_argument("--plot3D", metavar="none|metric|pval", choices=["none", "metric", "pval"],
+                        help="Generate streamline plots of each tract with FA ('metric') or significant areas "
+                             "('pval') on top",
+                        default="none")
+    parser.add_argument("--tracking_dir", metavar="folder_name",
+                        help="Set name of directory containing the tracking output (see same option for 'Tracking').",
+                        default="auto")
+    parser.add_argument("--tracking_format", metavar="tck|trk|trk_legacy", choices=["tck", "trk", "trk_legacy"],
+                        help="If using --plot3D you have to specify the format of the trackings which will get loaded."
+                             "(default: trk_legacy)",
+                        default="trk_legacy")
     args = parser.parse_args()
 
     # Choose how to define significance: by corrected alphaFWE or by clusters of values smaller than uncorrected alpha
@@ -239,13 +303,19 @@ def main():
     # Show p-value for each position, not only significant areas
     show_detailed_p = False
     hide_legend = False
+    show_color_bar = True  # colorbar on 3D plot
     nperm = args.nperm
 
     # Significance testing with multiple correction for bundles
     correct_mult_tract_comp = args.mc
 
     print("Correcting for comparison of multiple tracts: {}".format(correct_mult_tract_comp))
-    base_path, meta_data, selected_bundles = parse_subjects_file(args.subjects_file)
+    base_path, meta_data, selected_bundles, plot_3D_path = parse_subjects_file(args.subjects_file)
+
+    if args.plot3D != "none":
+        if plot_3D_path is None:
+            raise ValueError("'# plot_3D=...' is not set in " + args.subjects_file)
+        show_color_bar = False
 
     if meta_data.columns[1] == "group":
         analysis_type = "group"
@@ -275,7 +345,10 @@ def main():
 
     plot_tractometry_with_pvalue(values, meta_data, all_bundles, selected_bundles, args.output_path,
                                  args.alpha, FWE_method, analysis_type, correct_mult_tract_comp,
-                                 show_detailed_p, nperm=nperm, hide_legend=hide_legend)
+                                 show_detailed_p, nperm=nperm, hide_legend=hide_legend,
+                                 plot_3D_path=plot_3D_path, plot_3D_type=args.plot3D,
+                                 tracking_format=args.tracking_format, tracking_dir=args.tracking_dir,
+                                 show_color_bar=show_color_bar)
 
 
 if __name__ == '__main__':
