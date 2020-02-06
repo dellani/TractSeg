@@ -6,6 +6,7 @@ from __future__ import print_function
 from os.path import join
 from os.path import dirname
 from os.path import exists
+from os.path import isfile
 
 import psutil
 import numpy as np
@@ -15,6 +16,7 @@ from scipy.ndimage.morphology import binary_dilation
 
 from tractseg.libs import img_utils
 
+import os
 
 def angle_last_dim(a, b):
     """
@@ -261,8 +263,15 @@ def mask_and_normalize_peaks(peaks, tract_seg_path, bundles, dilation, nr_cpus=-
     """
     def _process_bundle(idx, bundle):
         bundle_peaks = np.copy(peaks[:, :, :, idx * 3:idx * 3 + 3])
-        img = nib.load(join(tract_seg_path, bundle + ".nii.gz"))
-        mask, flip_axis = img_utils.flip_axis_to_match_MNI_space(img.get_data(), img.affine)
+        # First check if there is a nifti file named after tract_set_path
+        if isfile(join(tract_seg_path, ".nii.gz")):
+            img = nib.load(join(tract_seg_path, ".nii.gz"))
+            pixel_data = img.get_data()[:, :, :, idx-1]
+        else:
+            img = nib.load(join(tract_seg_path, bundle + ".nii.gz"))
+            pixel_data = img.get_data()
+
+        mask, flip_axis = img_utils.flip_axis_to_match_MNI_space(pixel_data, img.affine)
         mask = binary_dilation(mask, iterations=dilation).astype(np.uint8)
         bundle_peaks[mask == 0] = 0
         bundle_peaks = normalize_peak_to_unit_length(bundle_peaks)
