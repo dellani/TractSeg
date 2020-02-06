@@ -264,8 +264,8 @@ def mask_and_normalize_peaks(peaks, tract_seg_path, bundles, dilation, nr_cpus=-
     def _process_bundle(idx, bundle):
         bundle_peaks = np.copy(peaks[:, :, :, idx * 3:idx * 3 + 3])
         # First check if there is a nifti file named after tract_set_path
-        if isfile(join(tract_seg_path, ".nii.gz")):
-            img = nib.load(join(tract_seg_path, ".nii.gz"))
+        if isfile(tract_seg_path + ".nii.gz"):
+            img = nib.load(tract_seg_path + ".nii.gz")
             pixel_data = img.get_data()[:, :, :, idx-1]
         else:
             img = nib.load(join(tract_seg_path, bundle + ".nii.gz"))
