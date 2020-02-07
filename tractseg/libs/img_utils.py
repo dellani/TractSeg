@@ -514,7 +514,9 @@ def change_spacing_4D(img_in, new_spacing=1.25):
     new_affine[1, 1] = new_spacing if img_in.affine[1, 1] > 0 else -new_spacing
     new_affine[2, 2] = new_spacing if img_in.affine[2, 2] > 0 else -new_spacing
 
-    new_shape = np.floor(np.array(img_in.get_data().shape) * (img_spacing / new_spacing))
+    # new_shape = np.floor(np.array(img_in.get_data().shape) * (img_spacing / new_spacing))
+    new_shape = np.floor(np.array(img_in.header.get_data_shape()) * (img_spacing / new_spacing))
+
     new_shape = new_shape[:3]  # drop last dim
 
     new_data = []

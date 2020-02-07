@@ -15,6 +15,7 @@ from joblib import Parallel, delayed
 from scipy.ndimage.morphology import binary_dilation
 
 from tractseg.libs import img_utils
+from tractseg.data import dataset_specific_utils
 
 import os
 
@@ -265,8 +266,9 @@ def mask_and_normalize_peaks(peaks, tract_seg_path, bundles, dilation, nr_cpus=-
         bundle_peaks = np.copy(peaks[:, :, :, idx * 3:idx * 3 + 3])
         # First check if there is a nifti file named after tract_set_path
         if isfile(tract_seg_path + ".nii.gz"):
+            bundle_index = dataset_specific_utils.get_bundle_name_index(bundle)
             img = nib.load(tract_seg_path + ".nii.gz")
-            pixel_data = img.get_data()[:, :, :, idx-1]
+            pixel_data = img.get_data()[:, :, :, bundle_index]
         else:
             img = nib.load(join(tract_seg_path, bundle + ".nii.gz"))
             pixel_data = img.get_data()

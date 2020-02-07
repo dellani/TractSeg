@@ -7,18 +7,23 @@ import tempfile
 import shutil
 import subprocess
 
+from os.path import isfile
+
 import nibabel as nib
 
 from tractseg.libs import fiber_utils
 from tractseg.libs import img_utils
 from tractseg.libs import tractseg_prob_tracking
 from tractseg.libs import peak_utils
+from tractseg.data import dataset_specific_utils
 
 
 def _mrtrix_tck_to_trk(output_dir, tracking_folder, dir_postfix, bundle, output_format, nr_cpus):
     ref_img = nib.load(output_dir + "/bundle_segmentations" + dir_postfix + "/" + bundle + ".nii.gz")
     reference_affine = ref_img.affine
-    reference_shape = ref_img.get_data().shape[:3]
+#   Don't need to load all the data to get its shape / dimmensions, info is stored in the image header
+#    reference_shape = ref_img.get_data().shape[:3]
+    reference_shape = ref_img.header.get_data_shape()[:3]
     fiber_utils.convert_tck_to_trk(output_dir + "/" + tracking_folder + "/" + bundle + ".tck",
                                    output_dir + "/" + tracking_folder + "/" + bundle + ".trk",
                                    reference_affine, reference_shape, compress_err_thr=0.1, smooth=None,
@@ -66,10 +71,38 @@ def track(bundle, peaks, output_dir, tracking_on_FODs, tracking_software, tracki
 
     # Check if bundle masks are valid
     if filter_by_endpoints:
-        bundle_mask_ok = nib.load(output_dir + "/bundle_segmentations" + dir_postfix
-                                  + "/" + bundle + ".nii.gz").get_data().max() > 0
-        beginnings_mask_ok = nib.load(output_dir + "/endings_segmentations/" + bundle + "_b.nii.gz").get_data().max() > 0
-        endings_mask_ok = nib.load(output_dir + "/endings_segmentations/" + bundle + "_e.nii.gz").get_data().max() > 0
+        if isfile(output_dir + "/bundle_segmentations" + dir_postfix + ".nii.gz"):
+            bundle_index = dataset_specific_utils.get_bundle_name_index(bundle)
+            print(bundle, bundle_index)
+            bundle_mask_img = nib.load(output_dir + "/bundle_segmentations" + dir_postfix + ".nii.gz")
+            bundle_mask_data = bundle_mask_img.get_data()[:, :, :, bundle_index]
+            bundle_mask_ok = bundle_mask_data.max() > 0
+        else:
+            bundle_mask_img = nib.load(output_dir + "/bundle_segmentations" + dir_postfix
+                                      + "/" + bundle + ".nii.gz")
+            bundle_mask_data = bundle_mask_img.get_data()
+            bundle_mask_ok = bundle_mask_data.max() > 0
+
+        if isfile(output_dir + "/bundle_endings.nii.gz"):
+            bundle_endings_img = nib.load(output_dir + "/bundle_endings.nii.gz")
+
+            bundle_index = dataset_specific_utils.get_bundle_name_index(bundle + "_b", "All_endpoints")
+            print(bundle + "_b", bundle_index)
+            beginnings_mask_data = bundle_endings_img.get_data()[:, :, :, bundle_index]
+            beginnings_mask_ok = beginnings_mask_data.max() > 0
+
+            bundle_index = dataset_specific_utils.get_bundle_name_index(bundle + "_e", "All_endpoints")
+            print(bundle + "_e", bundle_index)
+            endings_mask_data = bundle_endings_img.get_data()[:, :, :, bundle_index]
+            endings_mask_ok = endings_mask_data.max() > 0
+        else:
+            beginnings_mask_img = nib.load(output_dir + "/endings_segmentations/" + bundle + "_b.nii.gz")
+            beginnings_mask_data = beginnings_mask_img.get_data()
+            beginnings_mask_ok =beginnings_mask_data.max() > 0
+
+            endings_mask_img = nib.load(output_dir + "/endings_segmentations/" + bundle + "_e.nii.gz")
+            endings_mask_data = endings_mask_img.get_data()
+            endings_mask_ok = endings_mask_data.max() > 0
 
         if not bundle_mask_ok:
             print("WARNING: tract mask of {} empty. Creating empty tractogram.".format(bundle))
@@ -171,22 +204,25 @@ def track(bundle, peaks, output_dir, tracking_on_FODs, tracking_software, tracki
             else:
 
                 # Prepare files
-                bundle_mask_img = nib.load(output_dir + "/bundle_segmentations" + dir_postfix + "/"
-                                           + bundle + ".nii.gz")
-                beginnings_img = nib.load(output_dir + "/endings_segmentations/" + bundle + "_b.nii.gz")
-                endings_img = nib.load(output_dir + "/endings_segmentations/" + bundle + "_e.nii.gz")
-                tom_peaks_img = nib.load(output_dir + "/" + TOM_folder + "/" + bundle + ".nii.gz")
-
-                # Ensure same orientation as MNI space
-                bundle_mask, flip_axis = img_utils.flip_axis_to_match_MNI_space(bundle_mask_img.get_data(),
+                bundle_mask, flip_axis = img_utils.flip_axis_to_match_MNI_space(bundle_mask_data,
                                                                                 bundle_mask_img.affine)
-                beginnings, flip_axis = img_utils.flip_axis_to_match_MNI_space(beginnings_img.get_data(),
-                                                                                beginnings_img.affine)
-                endings, flip_axis = img_utils.flip_axis_to_match_MNI_space(endings_img.get_data(),
-                                                                                endings_img.affine)
-                tom_peaks, flip_axis = img_utils.flip_axis_to_match_MNI_space(tom_peaks_img.get_data(),
-                                                                                  tom_peaks_img.affine)
+                beginnings, flip_axis = img_utils.flip_axis_to_match_MNI_space(beginnings_mask_data,
+                                                                               bundle_endings_img.affine)
+                endings, flip_axis = img_utils.flip_axis_to_match_MNI_space(endings_mask_data,
+                                                                            bundle_endings_img.affine)
 
+                if isfile(output_dir + "/bundle_TOMs.nii.gz"):
+                    tom_peaks_img = nib.load(output_dir + "/bundle_TOMs.nii.gz")
+                    bundle_index = dataset_specific_utils.get_bundle_name_index(bundle)
+                    print(bundle, bundle_index)
+                    # Ensure same orientation as MNI space
+                    tom_peaks, flip_axis = img_utils.flip_axis_to_match_MNI_space(tom_peaks_img.get_data()[:, :, :, bundle_index:bundle_index+3],
+                                                                                  tom_peaks_img.affine)
+                else:
+                    tom_peaks_img = nib.load(output_dir + "/" + TOM_folder + "/" + bundle + ".nii.gz")
+                    # Ensure same orientation as MNI space
+                    tom_peaks, flip_axis = img_utils.flip_axis_to_match_MNI_space(tom_peaks_img.get_data(),
+                                                                                  tom_peaks_img.affine)
                 # tracking_uncertainties = nib.load(output_dir + "/tracking_uncertainties/" + bundle + ".nii.gz").get_data()
                 tracking_uncertainties = None
 
@@ -229,12 +265,14 @@ def track(bundle, peaks, output_dir, tracking_on_FODs, tracking_software, tracki
                 if output_format == "trk_legacy":
                     fiber_utils.save_streamlines_as_trk_legacy(output_dir + "/" + tracking_folder + "/" + bundle + ".trk",
                                                                streamlines, bundle_mask_img.affine,
-                                                               bundle_mask_img.get_data().shape)
+#                                                               bundle_mask_img.header.get_data().shape()
+                                                               bundle_mask_img.header.get_data_shape()[:3])
                 else:  # tck or trk (determined by file ending)
                     fiber_utils.save_streamlines(
                         output_dir + "/" + tracking_folder + "/" + bundle + "." + output_format,
                         streamlines, bundle_mask_img.affine,
-                        bundle_mask_img.get_data().shape)
+#                        bundle_mask_img.header.get_data().shape()
+                        bundle_mask_img.header.get_data_shape()[:3])
 
 
         # No streamline filtering

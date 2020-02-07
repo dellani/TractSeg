@@ -9,7 +9,6 @@ from tractseg.libs import img_utils
 from tractseg.data.subjects import get_all_subjects
 from tractseg.libs import utils
 
-
 def get_bundle_names(CLASSES):
 
     if CLASSES == "All":
@@ -166,6 +165,9 @@ def get_bundle_names(CLASSES):
 
     return ["BG"] + bundles  # Add Background label (is always beginning of list)
 
+
+def get_bundle_name_index(bundle, CLASSES="All"):
+    return get_bundle_names(CLASSES)[1:].index(bundle) # remove Background label (is always beginning of list)
 
 def get_ACT_noACT_bundle_names():
     ACT = ['AF_left', 'AF_right', 'ATR_left', 'ATR_right', 'CC_1', 'CC_2', 'CC_3', 'CC_4', 'CC_5', 'CC_6', 'CC_7',

@@ -182,7 +182,8 @@ def create_empty_tractogram(filename_out, reference_file,
 
     ref_img = nib.load(reference_file)
     reference_affine = ref_img.affine
-    reference_shape = ref_img.get_data().shape[:3]
+    # reference_shape = ref_img.get_data().shape[:3]
+    reference_shape = ref_img.header.get_data_shape()[:3]
 
     streamlines = []
 
